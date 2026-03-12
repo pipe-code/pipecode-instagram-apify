@@ -358,7 +358,13 @@ class PC_Instagram_Admin {
                                 </span>
                             </td>
                             <td class="col-caption">
-                                <?php echo esc_html(mb_strimwidth($post['caption'] ?? '', 0, 120, '…')); ?>
+                                <?php
+                                $caption = $post['caption'] ?? '';
+                                if (mb_strlen($caption) > 120) {
+                                    $caption = mb_substr($caption, 0, 120) . '…';
+                                }
+                                echo esc_html($caption);
+                                ?>
                                 <?php if (! empty($post['hashtags'])) : ?>
                                     <div class="pc-hashtags">
                                         <?php
@@ -373,10 +379,16 @@ class PC_Instagram_Admin {
                             <td class="col-num"><?php echo esc_html(number_format((int) $post['likes_count'])); ?></td>
                             <td class="col-num"><?php echo esc_html(number_format((int) $post['comments_count'])); ?></td>
                             <td class="col-date">
-                                <?php echo $post['timestamp'] ? esc_html(date('M j, Y', strtotime($post['timestamp']))) : '—'; ?>
+                                <?php
+                                $ts = $post['timestamp'] ? strtotime($post['timestamp']) : false;
+                                echo ($ts) ? esc_html(date('M j, Y', $ts)) : '—';
+                                ?>
                             </td>
                             <td class="col-date">
-                                <?php echo $post['created_at'] ? esc_html(date('M j, Y', strtotime($post['created_at']))) : '—'; ?>
+                                <?php
+                                $ts = $post['created_at'] ? strtotime($post['created_at']) : false;
+                                echo ($ts) ? esc_html(date('M j, Y', $ts)) : '—';
+                                ?>
                             </td>
                         </tr>
                         <?php endforeach; ?>

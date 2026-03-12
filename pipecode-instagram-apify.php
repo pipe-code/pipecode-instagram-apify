@@ -3,7 +3,7 @@
  * Plugin Name: Pipecode Instagram Apify
  * Plugin URI:  https://pipe-code.github.io/
  * Description: Syncs the latest Instagram posts via Apify and stores them in a custom table. Includes REST API and admin panel.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: Pipecode
  * Author URI:  https://pipe-code.github.io/
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 defined('ABSPATH') || exit;
 
-define('PC_INSTAGRAM_VERSION', '1.0.0');
+define('PC_INSTAGRAM_VERSION', '1.0.1');
 define('PC_INSTAGRAM_DIR', plugin_dir_path(__FILE__));
 define('PC_INSTAGRAM_URL', plugin_dir_url(__FILE__));
 define('PC_INSTAGRAM_TABLE', 'instagram_posts');
