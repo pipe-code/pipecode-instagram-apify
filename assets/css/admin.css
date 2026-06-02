@@ -184,7 +184,12 @@
 .pc-sync-status.pc-error   { color: #c62828; font-weight: 600; }
 
 @keyframes pc-spin { to { transform: rotate(360deg); } }
-.pc-spin-icon { animation: pc-spin .7s linear infinite; }
+.pc-spin-icon {
+    display: inline-block;
+    vertical-align: middle;
+    transform-origin: 50% 50%;
+    animation: pc-spin .7s linear infinite;
+}
 
 /* Sync log */
 .pc-sync-log {

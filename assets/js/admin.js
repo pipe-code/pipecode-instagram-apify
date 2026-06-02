@@ -115,10 +115,52 @@
         var $log        = $('#pc-sync-log');
         var $logContent = $('#pc-sync-log-content');
         var $spinIcon   = $syncBtn.find('.pc-spin-icon');
+        var pollTimer   = null;
+
+        function stopPolling() {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        }
+
+        function syncDone(d) {
+            stopPolling();
+            $syncBtn.prop('disabled', false);
+            $spinIcon.hide();
+            $status.removeClass('pc-error').addClass('pc-success')
+                .text('Done! ' + d.ok + ' synced, ' + d.errors + ' errors — ' + d.total + ' total.');
+            if (d.results) { renderLog(d.results); }
+        }
+
+        function syncFailed(msg) {
+            stopPolling();
+            $syncBtn.prop('disabled', false);
+            $spinIcon.hide();
+            $status.removeClass('pc-success').addClass('pc-error').text(msg);
+        }
+
+        function pollStatus() {
+            $.ajax({
+                url:     pcInstagram.ajaxUrl,
+                method:  'POST',
+                data:    { action: 'pc_instagram_sync_status', nonce: pcInstagram.nonce },
+                timeout: 10000,
+                success: function (res) {
+                    if (!res || !res.success) { return; }
+                    var d = res.data;
+                    if (d.status === 'done') {
+                        syncDone(d);
+                    } else if (d.status === 'timeout') {
+                        syncFailed('Sync timed out after 5 minutes. Check server logs.');
+                    } else if (d.status === 'running') {
+                        var elapsed = d.started ? Math.round(Date.now() / 1000 - d.started) : 0;
+                        $status.text('Syncing in background… (' + elapsed + 's elapsed)');
+                    }
+                    // 'idle' = not started yet, keep polling
+                },
+            });
+        }
 
         if ($syncBtn.length) {
             $syncBtn.on('click', function () {
-                // Client-side guard: verify endpoint is valid before submitting
                 var currentEndpoint = $endpointInput.length
                     ? $endpointInput.val().trim()
                     : pcInstagram.endpointValid ? 'https://api.apify.com/' : '';
@@ -129,37 +171,33 @@
                     return;
                 }
 
+                stopPolling();
                 $syncBtn.prop('disabled', true);
-                $spinIcon.show();
-                $status.removeClass('pc-success pc-error').text('Syncing… this may take up to 2 minutes.');
+                $spinIcon.css('display', 'inline-block');
+                $status.removeClass('pc-success pc-error').text('Starting sync…');
                 $log.hide();
                 $logContent.html('');
 
                 $.ajax({
                     url:     pcInstagram.ajaxUrl,
                     method:  'POST',
-                    data: {
-                        action: 'pc_instagram_manual_sync',
-                        nonce:  pcInstagram.nonce,
-                    },
-                    timeout: 180000,
+                    data:    { action: 'pc_instagram_manual_sync', nonce: pcInstagram.nonce },
+                    timeout: 15000,
                     success: function (res) {
-                        if (res.success) {
-                            var d = res.data;
-                            $status.removeClass('pc-error').addClass('pc-success')
-                                .text('Done! ' + d.ok + ' synced, ' + d.errors + ' errors — ' + d.total + ' total.');
-                            renderLog(d.results);
-                        } else {
-                            var msg = res.data && res.data.message ? res.data.message : 'Unknown error';
-                            $status.removeClass('pc-success').addClass('pc-error').text('Error: ' + msg);
+                        if (!res || !res.success) {
+                            syncFailed('Error: ' + (res && res.data && res.data.message ? res.data.message : 'Unknown error'));
+                            return;
                         }
+                        if (res.data.status === 'already_running') {
+                            $status.text('Sync already in progress…');
+                        } else {
+                            $status.text('Sync running in background…');
+                        }
+                        pollTimer = setInterval(pollStatus, 3000);
+                        pollStatus();
                     },
                     error: function (_xhr, _s, err) {
-                        $status.removeClass('pc-success').addClass('pc-error').text('Request failed: ' + err);
-                    },
-                    complete: function () {
-                        $syncBtn.prop('disabled', false);
-                        $spinIcon.hide();
+                        syncFailed('Request failed: ' + err);
                     },
                 });
             });
@@ -173,7 +211,7 @@
                 var cls  = r.ok ? 'pc-log-ok' : 'pc-log-error';
                 var icon = r.ok ? '✓' : '✗';
                 var msg  = r.ok
-                    ? icon + ' ' + r.post_id + ' → row #' + r.row_id
+                    ? icon + ' ' + r.post_id + ' [' + (r.action || 'ok') + '] → row #' + r.row_id
                     : icon + ' ' + r.post_id + ' — ' + (r.error || 'error');
                 return '<div class="' + cls + '">' + $('<span>').text(msg).html() + '</div>';
             });

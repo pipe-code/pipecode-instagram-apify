@@ -45,6 +45,16 @@ class PC_Instagram_DB {
         $wpdb->query("DROP TABLE IF EXISTS {$table}");
     }
 
+    public static function get_by_post_id(string $post_id): ?array {
+        global $wpdb;
+        $table = self::table_name();
+        $row   = $wpdb->get_row(
+            $wpdb->prepare("SELECT * FROM {$table} WHERE post_id = %s LIMIT 1", $post_id),
+            ARRAY_A
+        );
+        return $row ?: null;
+    }
+
     /**
      * Upsert a single post row. Returns row id or false.
      */
@@ -100,6 +110,33 @@ class PC_Instagram_DB {
             ),
             ARRAY_A
         ) ?: [];
+    }
+
+    /**
+     * For posts with an empty cover but a downloaded gallery, promote gallery[0] as the cover.
+     * Runs after every sync to repair orphaned posts that Apify no longer returns.
+     */
+    public static function backfill_covers_from_gallery(): int {
+        global $wpdb;
+        $table = self::table_name();
+
+        $rows = $wpdb->get_results(
+            "SELECT id, images FROM {$table}
+             WHERE (display_url IS NULL OR display_url = '')
+               AND images IS NOT NULL AND images != '' AND images != '[]'",
+            ARRAY_A
+        );
+
+        $fixed = 0;
+        foreach ($rows as $row) {
+            $imgs = json_decode($row['images'], true);
+            if (! empty($imgs[0])) {
+                $wpdb->update($table, ['display_url' => $imgs[0]], ['id' => (int) $row['id']]);
+                $fixed++;
+            }
+        }
+
+        return $fixed;
     }
 
     public static function count(): int {

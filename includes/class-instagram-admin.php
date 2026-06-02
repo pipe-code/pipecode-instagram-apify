@@ -11,6 +11,7 @@ class PC_Instagram_Admin {
         add_action('admin_menu',            [__CLASS__, 'register_menu']);
         add_action('admin_enqueue_scripts', [__CLASS__, 'enqueue_assets']);
         add_action('wp_ajax_pc_instagram_manual_sync',   [__CLASS__, 'ajax_manual_sync']);
+        add_action('wp_ajax_pc_instagram_sync_status',  [__CLASS__, 'ajax_sync_status']);
         add_action('wp_ajax_pc_instagram_save_settings', [__CLASS__, 'ajax_save_settings']);
     }
 
@@ -86,20 +87,71 @@ class PC_Instagram_Admin {
 
         if (! current_user_can('manage_options')) {
             wp_send_json_error(['message' => 'Unauthorized'], 403);
+            return;
         }
 
+        // Block duplicate concurrent runs.
+        $current = get_transient('pc_instagram_sync_status');
+        if ($current && ($current['status'] ?? '') === 'running' && (time() - ($current['started'] ?? 0)) < 300) {
+            wp_send_json_success(['status' => 'already_running']);
+            return;
+        }
+
+        @set_time_limit(0);
+        ignore_user_abort(true);
+
+        set_transient('pc_instagram_sync_status', ['status' => 'running', 'started' => time()], 600);
+
+        // Close the HTTP connection immediately so the gateway proxy (nginx/Apache)
+        // doesn't time out while the long sync runs in the background.
+        $json = wp_json_encode(['success' => true, 'data' => ['status' => 'started']]);
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Length: ' . strlen($json));
+        header('Connection: close');
+        echo $json;
+        flush();
+        if (function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+
+        // ↓ Runs after the HTTP response has been delivered to the browser.
         $sync    = new PC_Instagram_Sync();
         $results = $sync->run();
 
         $ok_count  = count(array_filter($results, fn($r) => $r['ok']));
         $err_count = count($results) - $ok_count;
 
-        wp_send_json_success([
+        set_transient('pc_instagram_sync_status', [
+            'status'  => 'done',
             'total'   => count($results),
             'ok'      => $ok_count,
             'errors'  => $err_count,
             'results' => $results,
-        ]);
+        ], 300);
+
+        exit;
+    }
+
+    public static function ajax_sync_status(): void {
+        check_ajax_referer('pc_instagram_sync', 'nonce');
+
+        $status = get_transient('pc_instagram_sync_status');
+        if (! $status) {
+            wp_send_json_success(['status' => 'idle']);
+            return;
+        }
+
+        // Auto-expire stuck "running" jobs after 5 minutes.
+        if (($status['status'] ?? '') === 'running' && (time() - ($status['started'] ?? 0)) > 300) {
+            delete_transient('pc_instagram_sync_status');
+            wp_send_json_success(['status' => 'timeout']);
+            return;
+        }
+
+        wp_send_json_success($status);
     }
 
     // ── AJAX: save settings ──────────────────────────────────────────────────

@@ -62,6 +62,9 @@ class PC_Instagram_Sync {
             $results[] = $this->process_item($item);
         }
 
+        // Repair any posts that have a downloaded gallery but no cover image.
+        PC_Instagram_DB::backfill_covers_from_gallery();
+
         update_option('pc_instagram_last_sync', current_time('mysql', true));
         return $results;
     }
@@ -73,25 +76,33 @@ class PC_Instagram_Sync {
         }
 
         try {
-            $display_url = '';
-            if (! empty($item['displayUrl'])) {
-                $attachment_id = $this->download_image(
-                    $item['displayUrl'],
-                    'ig-' . ($item['shortCode'] ?? $post_id) . '-cover'
-                );
-                if ($attachment_id) {
-                    $display_url = wp_get_attachment_url($attachment_id);
-                }
-            }
+            $existing    = PC_Instagram_DB::get_by_post_id($post_id);
+            $is_new      = empty($existing);
 
-            $gallery = [];
-            if (! empty($item['childPosts']) && is_array($item['childPosts'])) {
-                foreach ($item['childPosts'] as $i => $child) {
-                    $img_src = $child['displayUrl'] ?? ($child['images'][0] ?? '');
-                    if (empty($img_src)) continue;
+            // ── Gallery images ───────────────────────────────────────────────
+            // Only download if none are stored yet.
+            $gallery = ($existing['images'] ?? null)
+                ? json_decode($existing['images'], true)
+                : [];
+
+            if (empty($gallery)) {
+                // Prefer childPosts (has individual shortCodes), fall back to top-level images array.
+                $gallery_srcs = [];
+                if (! empty($item['childPosts']) && is_array($item['childPosts'])) {
+                    foreach ($item['childPosts'] as $idx => $child) {
+                        $src = $child['displayUrl'] ?? (is_array($item['images'] ?? null) ? ($item['images'][$idx] ?? '') : '');
+                        if (! empty($src)) {
+                            $gallery_srcs[] = $src;
+                        }
+                    }
+                } elseif (! empty($item['images']) && is_array($item['images'])) {
+                    $gallery_srcs = $item['images'];
+                }
+
+                foreach ($gallery_srcs as $i => $img_src) {
                     $child_id = $this->download_image(
                         $img_src,
-                        'ig-' . ($item['shortCode'] ?? $post_id) . '-child-' . ($i + 1)
+                        'ig-' . ($item['shortCode'] ?? $post_id) . '-img-' . ($i + 1)
                     );
                     if ($child_id) {
                         $gallery[] = wp_get_attachment_url($child_id);
@@ -99,6 +110,37 @@ class PC_Instagram_Sync {
                 }
             }
 
+            // ── Cover image ──────────────────────────────────────────────────
+            // Keep the already-stored local URL; only download if we don't have one.
+            $display_url = $existing['display_url'] ?? '';
+
+            if (empty($display_url)) {
+                // Priority: displayUrl → childPosts[0] → top-level images[0] → already-downloaded gallery[0]
+                $cover_src = $item['displayUrl'] ?? '';
+                if (empty($cover_src) && ! empty($item['childPosts'][0]['displayUrl'])) {
+                    $cover_src = $item['childPosts'][0]['displayUrl'];
+                }
+                if (empty($cover_src) && ! empty($item['images'][0])) {
+                    $cover_src = $item['images'][0];
+                }
+
+                if (! empty($cover_src)) {
+                    $attachment_id = $this->download_image(
+                        $cover_src,
+                        'ig-' . ($item['shortCode'] ?? $post_id) . '-cover'
+                    );
+                    if ($attachment_id) {
+                        $display_url = wp_get_attachment_url($attachment_id);
+                    }
+                }
+
+                // Last resort: if gallery was already downloaded, promote first image as cover.
+                if (empty($display_url) && ! empty($gallery[0])) {
+                    $display_url = $gallery[0];
+                }
+            }
+
+            // ── Always update text / engagement fields ───────────────────────
             $data = [
                 'post_id'        => $post_id,
                 'caption'        => $item['caption']       ?? '',
@@ -118,7 +160,7 @@ class PC_Instagram_Sync {
 
             $row_id = PC_Instagram_DB::upsert($data);
 
-            return ['ok' => true, 'post_id' => $post_id, 'row_id' => $row_id];
+            return ['ok' => true, 'post_id' => $post_id, 'row_id' => $row_id, 'action' => $is_new ? 'created' : 'updated'];
 
         } catch (Throwable $e) {
             return ['ok' => false, 'post_id' => $post_id, 'error' => $e->getMessage()];
